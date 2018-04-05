@@ -72,12 +72,13 @@ def ten_crop(img, size):
 
 def transform_train(data, label):
     im = data.astype('float32') / 255
+    #进行数据增强
     auglist = image.CreateAugmenter(data_shape=(3, 224, 224), resize=256,
                                     rand_crop=True, rand_mirror=True,
                                     mean = np.array([0.485, 0.456, 0.406]),
                                     std = np.array([0.229, 0.224, 0.225]))
     for aug in auglist:
-        im = aug(im)
+        im = aug(im) #对每张图像进行数据增强
     im = nd.transpose(im, (2,0,1))
     return (im, nd.array([label]).asscalar())
 
@@ -97,6 +98,7 @@ def transform_predict(im):
     im = ten_crop(im, (224, 224))
     return (im)
 
+#训练过程的进度条
 def progressbar(i, n, bar_len=40):
     percents = math.ceil(100.0 * i / float(n))
     filled_len = int(round(bar_len * i / float(n)))
@@ -105,7 +107,7 @@ def progressbar(i, n, bar_len=40):
 
 def validate(net, val_data, ctx):
     metric = mx.metric.Accuracy()
-    L = gluon.loss.SoftmaxCrossEntropyLoss()
+    L = gluon.loss.SoftmaxCrossEntropyLoss() #交叉熵损失
     AP = 0.
     AP_cnt = 0
     val_loss = 0
@@ -125,16 +127,16 @@ def validate(net, val_data, ctx):
 def train():
     logging.info('Start Training for Task: %s\n' % (task))
 
-    # Initialize the net with pretrained model
+    # Initialize the net with pretrained model，使用预训练好的模型
     pretrained_net = gluon.model_zoo.vision.get_model(model_name, pretrained=True)
 
     finetune_net = gluon.model_zoo.vision.get_model(model_name, classes=task_num_class)
-    finetune_net.features = pretrained_net.features
-    finetune_net.output.initialize(init.Xavier(), ctx = ctx)
-    finetune_net.collect_params().reset_ctx(ctx)
+    finetune_net.features = pretrained_net.features  #拷贝预训练模型的特征
+    finetune_net.output.initialize(init.Xavier(), ctx = ctx) #对网络进行初始化
+    finetune_net.collect_params().reset_ctx(ctx) #参数放在gpu上
     finetune_net.hybridize()
 
-    # Define DataLoader
+    # Define DataLoader定义数据加载器
     train_data = gluon.data.DataLoader(
         gluon.data.vision.ImageFolderDataset(
             os.path.join('data/train_valid', task, 'train'),
@@ -147,17 +149,17 @@ def train():
             transform=transform_val),
         batch_size=batch_size, shuffle=False, num_workers = num_workers)
 
-    # Define Trainer
+    # Define Trainer 训练器
     trainer = gluon.Trainer(finetune_net.collect_params(), 'sgd', {
         'learning_rate': lr, 'momentum': momentum, 'wd': wd})
     metric = mx.metric.Accuracy()
-    L = gluon.loss.SoftmaxCrossEntropyLoss()
+    L = gluon.loss.SoftmaxCrossEntropyLoss()#损失函数
     lr_counter = 0
     num_batch = len(train_data)
 
     # Start Training
     for epoch in range(epochs):
-        if epoch == lr_steps[lr_counter]:
+        if epoch == lr_steps[lr_counter]: #学习率衰减
             trainer.set_learning_rate(trainer.learning_rate*lr_factor)
             lr_counter += 1
 
@@ -184,7 +186,7 @@ def train():
             AP += ap
             AP_cnt += cnt
 
-            progressbar(i, num_batch-1)
+            progressbar(i, num_batch-1) #训练进度条
 
         train_map = AP / AP_cnt
         _, train_acc = metric.get()
@@ -198,6 +200,7 @@ def train():
     logging.info('\n')
     return (finetune_net)
 
+#使用test图像进行测试
 def predict(task):
     logging.info('Training Finished. Starting Prediction.\n')
     f_out = open('submission/%s.csv'%(task), 'w')
@@ -261,6 +264,6 @@ logging.basicConfig(level=logging.INFO,
                     ])
 
 if __name__ == "__main__":
-    net = train()
-    predict(task)
+    net = train() #训练
+    predict(task) #测试
 
