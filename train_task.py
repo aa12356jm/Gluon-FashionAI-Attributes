@@ -7,34 +7,50 @@ from mxnet import autograd as ag
 from mxnet.gluon import nn
 from mxnet.gluon.model_zoo import vision as models
 
+#参数设置
 def parse_args():
     parser = argparse.ArgumentParser(description='Gluon for FashionAI Competition',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    #任务类别，必须指定
     parser.add_argument('--task', required=True, type=str,
                         help='name of the classification task')
+    #预训练模型，必须指定
     parser.add_argument('--model', required=True, type=str,
                         help='name of the pretrained model from model zoo.')
+    #cpu核心数
     parser.add_argument('-j', '--workers', dest='num_workers', default=4, type=int,
                         help='number of preprocessing workers')
+    #GPU数量
     parser.add_argument('--num-gpus', default=0, type=int,
                         help='number of gpus to use, 0 indicates cpu only')
+    #迭代的epoch数量
     parser.add_argument('--epochs', default=40, type=int,
                         help='number of training epochs')
+	#batch-size大小    
     parser.add_argument('-b', '--batch-size', default=64, type=int,
                         help='mini-batch size')
+    #学习率设置
     parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                         help='initial learning rate')
+    #冲量设置
     parser.add_argument('--momentum', default=0.9, type=float,
                         help='momentum')
+    
+    #权重衰减(通常使用L2范数)，对权重的惩罚，使权重不至于过大，保持在较小的范围内
     parser.add_argument('--weight-decay', '--wd', dest='wd', default=1e-4, type=float,
                         help='weight decay (default: 1e-4)')
+    
+    #学习率衰减比例，就是每次衰减为原来的0.75
     parser.add_argument('--lr-factor', default=0.75, type=float,
                         help='learning rate decay ratio')
+    
+    #学习率衰减频率，就是每次隔多少个epoch按照比例进行衰减
     parser.add_argument('--lr-steps', default='10,20,30', type=str,
                         help='list of learning rate decay epochs as in str')
     args = parser.parse_args()
     return args
 
+#计算AP精度
 def calculate_ap(labels, outputs):
     cnt = 0
     ap = 0.
@@ -47,6 +63,7 @@ def calculate_ap(labels, outputs):
             cnt += 1
     return ((ap, cnt))
 
+#对训练数据进行crop增强
 def ten_crop(img, size):
     H, W = size
     iH, iW = img.shape[1:3]
@@ -70,6 +87,7 @@ def ten_crop(img, size):
     )
     return (crops)
 
+#训练数据增广函数
 def transform_train(data, label):
     im = data.astype('float32') / 255
     #进行数据增强
@@ -82,13 +100,14 @@ def transform_train(data, label):
     im = nd.transpose(im, (2,0,1))
     return (im, nd.array([label]).asscalar())
 
+#训练数据增广函数
 def transform_val(data, label):
     im = data.astype('float32') / 255
-    im = image.resize_short(im, 256)
-    im, _ = image.center_crop(im, (224, 224))
-    im = nd.transpose(im, (2,0,1))
-    im = mx.nd.image.normalize(im, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
-    return (im, nd.array([label]).asscalar())
+    im = image.resize_short(im, 256) #对数据按照短边进行crop为256*256
+    im, _ = image.center_crop(im, (224, 224)) #对数据进行中心裁剪为224*224
+    im = nd.transpose(im, (2,0,1))  #
+    im = mx.nd.image.normalize(im, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))#归一化操作
+    return (im, nd.array([label]).asscalar()) #返回图像和标签
 
 def transform_predict(im):
     im = im.astype('float32') / 255
@@ -105,6 +124,7 @@ def progressbar(i, n, bar_len=40):
     prog_bar = '=' * filled_len + '-' * (bar_len - filled_len)
     print('[%s] %s%s' % (prog_bar, percents, '%'), end = '\r')
 
+#使用验证集对网络进行调参
 def validate(net, val_data, ctx):
     metric = mx.metric.Accuracy()
     L = gluon.loss.SoftmaxCrossEntropyLoss() #交叉熵损失
@@ -114,25 +134,28 @@ def validate(net, val_data, ctx):
     for i, batch in enumerate(val_data):
         data = gluon.utils.split_and_load(batch[0], ctx_list=ctx, batch_axis=0, even_split=False)
         label = gluon.utils.split_and_load(batch[1], ctx_list=ctx, batch_axis=0, even_split=False)
-        outputs = [net(X) for X in data]
-        metric.update(label, outputs)
-        loss = [L(yhat, y) for yhat, y in zip(outputs, label)]
-        val_loss += sum([l.mean().asscalar() for l in loss]) / len(loss)
-        ap, cnt = calculate_ap(label, outputs)
+        outputs = [net(X) for X in data] #每一张图像经过网络前向计算得到的输出值
+        metric.update(label, outputs) 
+        loss = [L(yhat, y) for yhat, y in zip(outputs, label)]#根据真实标签和计算结果来计算loss
+        val_loss += sum([l.mean().asscalar() for l in loss]) / len(loss) #总验证loss
+        ap, cnt = calculate_ap(label, outputs) #计算AP精度
         AP += ap
         AP_cnt += cnt
     _, val_acc = metric.get()
     return ((val_acc, AP / AP_cnt, val_loss / len(val_data)))
 
+
+#训练函数
 def train():
     logging.info('Start Training for Task: %s\n' % (task))
 
-    # Initialize the net with pretrained model，使用预训练好的模型
+    # Initialize the net with pretrained model，使用预训练好的模型参数
     pretrained_net = gluon.model_zoo.vision.get_model(model_name, pretrained=True)
-
-    finetune_net = gluon.model_zoo.vision.get_model(model_name, classes=task_num_class)
-    finetune_net.features = pretrained_net.features  #拷贝预训练模型的特征
-    finetune_net.output.initialize(init.Xavier(), ctx = ctx) #对网络进行初始化
+	
+	#使用此网络结构
+    finetune_net = gluon.model_zoo.vision.get_model(model_name, classes=task_num_class) 
+    finetune_net.features = pretrained_net.features  #拷贝预训练模型的参数
+    finetune_net.output.initialize(init.Xavier(), ctx = ctx) #对网络进行初始化参数
     finetune_net.collect_params().reset_ctx(ctx) #参数放在gpu上
     finetune_net.hybridize()
 
@@ -155,11 +178,12 @@ def train():
     metric = mx.metric.Accuracy()
     L = gluon.loss.SoftmaxCrossEntropyLoss()#损失函数
     lr_counter = 0
-    num_batch = len(train_data)
+    num_batch = len(train_data)#训练数据有多少个batch-size
 
     # Start Training
-    for epoch in range(epochs):
-        if epoch == lr_steps[lr_counter]: #学习率衰减
+    for epoch in range(epochs): #每次训练一个epoch
+        if epoch == lr_steps[lr_counter]: 
+        	#学习率衰减为原来的lr_factor
             trainer.set_learning_rate(trainer.learning_rate*lr_factor)
             lr_counter += 1
 
@@ -169,16 +193,17 @@ def train():
         AP = 0.
         AP_cnt = 0
 
+        #每次从训练数据中拿出batch-size个数据进行训练
         for i, batch in enumerate(train_data):
             data = gluon.utils.split_and_load(batch[0], ctx_list=ctx, batch_axis=0, even_split=False)
             label = gluon.utils.split_and_load(batch[1], ctx_list=ctx, batch_axis=0, even_split=False)
             with ag.record():
-                outputs = [finetune_net(X) for X in data]
-                loss = [L(yhat, y) for yhat, y in zip(outputs, label)]
+                outputs = [finetune_net(X) for X in data] #每个图像经过网络计算得到结果
+                loss = [L(yhat, y) for yhat, y in zip(outputs, label)]#计算loss
             for l in loss:
-                l.backward()
+                l.backward() #计算梯度
 
-            trainer.step(batch_size)
+            trainer.step(batch_size) #每次迭代batch-size个数据
             train_loss += sum([l.mean().asscalar() for l in loss]) / len(loss)
 
             metric.update(label, outputs)
@@ -192,7 +217,7 @@ def train():
         _, train_acc = metric.get()
         train_loss /= num_batch
 
-        val_acc, val_map, val_loss = validate(finetune_net, val_data, ctx)
+        val_acc, val_map, val_loss = validate(finetune_net, val_data, ctx) #计算验证精度
 
         logging.info('[Epoch %d] Train-acc: %.3f, mAP: %.3f, loss: %.3f | Val-acc: %.3f, mAP: %.3f, loss: %.3f | time: %.1f' %
                  (epoch, train_acc, train_map, train_loss, val_acc, val_map, val_loss, time.time() - tic))
@@ -203,7 +228,9 @@ def train():
 #使用test图像进行测试
 def predict(task):
     logging.info('Training Finished. Starting Prediction.\n')
-    f_out = open('submission/%s.csv'%(task), 'w')
+    f_out = open('submission/%s.csv'%(task), 'w')  #将测试结果写入到此文件
+
+    #加载测试集中的图像，将网络检测结果写入到文件中
     with open('data/rank/Tests/question.csv', 'r') as f_in:
         lines = f_in.readlines()
     tokens = [l.rstrip().split(',') for l in lines]
@@ -226,7 +253,7 @@ def predict(task):
     f_out.close()
 
 # Preparation
-args = parse_args()
+args = parse_args() #解析命令行参数
 
 task_list = {
     'collar_design_labels': 5,
@@ -238,25 +265,26 @@ task_list = {
     'pant_length_labels': 6,
     'sleeve_length_labels': 9
 }
-task = args.task
-task_num_class = task_list[task]
+task = args.task  #参数中指定的任务类别
+task_num_class = task_list[task] #此任务中的有多少个类别
 
-model_name = args.model
+model_name = args.model #参数中指定的预训练模型类型
 
-epochs = args.epochs
-lr = args.lr
-batch_size = args.batch_size
-momentum = args.momentum
-wd = args.wd
+epochs = args.epochs  #参数中指定的epoch数量
+lr = args.lr    #参数中指定的学习率
+batch_size = args.batch_size  #参数中指定的学习率
+momentum = args.momentum  #参数中指定的momentum的大小
+wd = args.wd  #参数中指定的weight decay大小
 
-lr_factor = args.lr_factor
-lr_steps = [int(s) for s in args.lr_steps.split(',')] + [np.inf]
+lr_factor = args.lr_factor #参数中指定的每次学习率衰减参数
+lr_steps = [int(s) for s in args.lr_steps.split(',')] + [np.inf]  #参数中指定的学习率衰减频率
 
-num_gpus = args.num_gpus
-num_workers = args.num_workers
+num_gpus = args.num_gpus  #参数中指定的GPU数量
+num_workers = args.num_workers   #参数中指定的cpu核心数
 ctx = [mx.gpu(i) for i in range(num_gpus)] if num_gpus > 0 else [mx.cpu()]
-batch_size = batch_size * max(num_gpus, 1)
+batch_size = batch_size * max(num_gpus, 1)  #batchsize根据GPU个数来确定
 
+#log信息
 logging.basicConfig(level=logging.INFO,
                     handlers = [
                         logging.StreamHandler(),
