@@ -150,11 +150,10 @@ def train():
     logging.info('Start Training for Task: %s\n' % (task))
 
     # Initialize the net with pretrained model，使用预训练好的模型参数
-    pretrained_net = gluon.model_zoo.vision.get_model(model_name, pretrained=True)
-	
-	#使用此网络结构
-    finetune_net = gluon.model_zoo.vision.get_model(model_name, classes=task_num_class) 
-    finetune_net.features = pretrained_net.features  #拷贝预训练模型的参数
+    finetune_net = gluon.model_zoo.vision.get_model(model_name, pretrained=True)
+    with finetune_net.name_scope():
+	finetune_net.output = nn.Dense(task_num_class)
+
     finetune_net.output.initialize(init.Xavier(), ctx = ctx) #对网络进行初始化参数
     finetune_net.collect_params().reset_ctx(ctx) #参数放在gpu上
     finetune_net.hybridize()
